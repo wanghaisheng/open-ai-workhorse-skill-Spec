@@ -74,3 +74,125 @@
 - **Role / Persona** 才是“人”，带性格、目标、完整技能栈。
 
 只有把 **Role/Persona** 当作第一公民（顶层商品），才能真正实现“同一个runtime，不同人生阶段/职业的技能切换”，避免锁定单一生态，也最贴近人类直觉。
+
+
+
+
+
+**我们想做的 Registry/Mirror 设计方案（v1.1）**  
+**更新日期**：2026年3月13日  
+**版本升级说明**：从 v1.0 升级至 v1.1，已全面整合 OARSS v1.0 规范、四层结构、sub_skills 依赖机制、Registry Index JSON Schema、config.toml、3个高质量示例角色、CLI 搜索/安装逻辑（Bash + Node.js MVP）、install-examples.sh 脚本等最新讨论成果。
+
+**目标**：一个**完全开放、不锁定任何 runtime**（Claude Code、Cursor、Codex、Gemini CLI、OpenClaw、LangGraph 等全兼容）、**以 Role/Persona（人的角色 + 完整技能栈）为第一公民**的 Agent Skills Registry & Mirror。  
+它既能做**企业内部私有 mirror**（安全、合规、零延迟、离线），也能作为**社区公开 registry** 存在，避免下一个“npm 垄断”或“ClawHub 单点风险”。
+
+### 1. 核心设计原则（严格遵循概念澄清文档 + OARSS v1.0 规范）
+- **Runtime（Agent）** = 执行空壳（IDE + Model），只负责加载，不存储能力。
+- **Tool** = 原子能力（底层）。
+- **Procedure** = 结构化步骤/checklist。
+- **Skill** = 专家流程包（SKILL.md 标准）。
+- **Role/Persona** = **第一公民**（顶层商品），代表“同一个男人不同身份的完整技能栈”（丈夫角色、工程师角色、产品经理角色等）。
+- 所有 artifact **必须兼容 Anthropic Agent Skills 开放标准**（SKILL.md 文件夹 + YAML frontmatter），并严格遵循 **OARSS v1.0**（新增 `metadata.type`、`sub_skills`、`role_category`、`trigger_scenarios` 等扩展字段）。
+- Mirror 机制：像 apt/yum/nexus 一样，支持一键同步官方（agentskills.io / skills.sh / GitHub）+ 企业私有覆盖 + 索引优先级。
+
+### 2. 整体架构（四层解耦，新增 Registry Index）
+```
+[用户 / Runtime]
+      ↓ (CLI: oar)
+[Mirror / Registry 服务] ← 企业私有实例 or 社区公开
+      ↓ (内容寻址 + 签名 + index.json)
+[存储层]
+  ├── Metadata Index（index.json + PostgreSQL JSONB）
+  ├── Content Storage（IPFS CID / Git / S3）
+  └── Signature Store（cosign / sigstore）
+```
+
+- **Registry 服务**：轻量 Go 服务（fork Solo.io agentregistry）或 Node.js，提供 REST API + index.json。
+- **Mirror 同步引擎**：定时/事件驱动拉取官方 + 增量更新 + 签名校验。
+- **CLI**：统一 `oar`（基于 Vercel skills.sh fork + 自定义扩展）。
+- **新增核心**：`index.json`（Registry Index Schema） + `~/.oarss/config.toml`。
+
+### 3. 关键特性（Role-First + sub_skills + 企业 Mirror 优先）
+1. **Role/Persona Bundle 为核心商品**（OARSS 强制）
+   - 一个 bundle = 一个文件夹（扩展 SKILL.md）：
+     ```yaml
+     name: senior-fullstack-engineer
+     metadata:
+       type: persona-bundle          # 关键区分字段
+       role_category: ["开发-全栈", "工程师"]
+       persona_backstory: "..."
+       trigger_scenarios: ["React / Next.js / 代码 review"]
+       sub_skills: [                 # 依赖数组，支持 semver + required/optional
+         {name: "react-best-practices", version: "^1.3", required: true},
+         ...
+       ]
+     ```
+   - 用户搜索：`oar search "全栈"` → 直接安装整个栈 + 自动递归 sub_skills。
+
+2. **四层 artifact 分层存储**（OARSS 定义）
+   - Tool / Procedure / Skill（可被复用）
+   - Persona Bundle（顶层，带 sub_skills 依赖）
+
+3. **企业 Mirror 特性（核心需求）**
+   - `oar mirror add https://internal.mycompany.com`
+   - 自动同步官方 index.json + 私有覆盖（企业技能永远优先）。
+   - 自定义审核队列 + 安全扫描。
+   - 离线支持：完全内网运行。
+   - 审计日志：安装记录、激活记录、token 消耗。
+
+4. **安全 & 信任**
+   - 强制 cosign 签名（官方 + 企业 CA）。
+   - Supply-chain 扫描。
+   - 版本锁定 + 回滚。
+
+5. **发现与治理**
+   - Semantic search（按 role_category、trigger_scenarios、sub_skills）。
+   - 社区 leaderboard（公开版可选）。
+   - DAO / 多签下架（长期）。
+
+6. **新增：CLI 配置与 Registry Index**
+   - `~/.oarss/config.toml`（registries、install paths、dependencies 行为、security、cache）。
+   - `index.json`（Registry Index Schema）：轻量元数据摘要，支持搜索、依赖解析、mirror 复制。
+
+### 4. 技术栈（已落地部分标★）
+- **基础**：fork Vercel skills.sh CLI + Solo.io agentregistry。
+- **CLI**：Node.js（推荐）或 Bash MVP（oar search / install，支持递归 sub_skills）。
+- **后端**：Go（agentregistry）或 Node。
+- **存储**：
+  - Metadata：index.json（轻量）+ PostgreSQL JSONB。
+  - Content：IPFS CID / Git（sparse-checkout）+ S3。
+- **镜像工具**：自研 mirror-sync（类似 Verdaccio）。
+- **部署**：
+  - 企业：Docker / K8s（Harbor 风格）。
+  - 社区：免费公开实例（registry.oarss.org）。
+- **已落地**：install-examples.sh、config.toml 示例、index.json 示例、3个高质量角色示例（senior-fullstack-engineer + loving-husband-role + product-manager-role）。
+
+**CLI 命令示例**（当前可用）：
+```bash
+oar search "丈夫"                     # 语义搜索
+oar install senior-fullstack-engineer --with-deps --mirror internal
+oar mirror add https://internal.company.com
+oar sync --from skills.sh             # 一键镜像官方
+oar deps tree product-manager-role    # 查看 sub_skills 依赖树
+```
+
+### 5. 落地路线图（已更新，1个月内可见成果）
+- **已完成（第 1 周）**：OARSS v1.0 规范 + 3个高质量示例角色 + index.json + config.toml + CLI 搜索/安装伪代码 + install-examples.sh。
+- **第 2–3 周**：完整 oar CLI（Node.js）+ 递归 sub_skills 安装 + 签名验证。
+- **第 4 周**：私有 mirror PoC + 安全扫描 + 企业部署文档。
+- **第 2 月**：社区公开 registry（skills.oarss.org）+ leaderboard。
+- **第 3 月**：IPFS 支持 + DAO 治理原型。
+
+### 6. 风险与对策（更新后）
+- 生态碎片：强制 OARSS + Anthropic 标准（已成事实，无风险）。
+- 恶意 skill：企业 mirror 默认审核 + 签名 + 安全扫描。
+- 性能：index.json 轻量缓存 + IPFS CID + CDN。
+- 兼容性：所有示例均 100% 兼容现有 runtime。
+
+**一句话总结**：  
+我们做的不是“又一个 ClawHub”，而是 **npm + apt + Docker Hub 的 Agent Skills 版**，以 **OARSS + Persona Bundle + sub_skills** 为核心，runtime 随意切换，企业 mirror 一键部署，完全开放、可镜像、可复用。
+
+这个 v1.1 方案已完全符合“开放 + Role 第一 + mirror 优先”的预期，并且具备可立即落地的可执行部分（index.json、config.toml、CLI 伪代码、示例角色、安装脚本）。
+
+
+
